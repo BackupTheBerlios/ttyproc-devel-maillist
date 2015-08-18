@@ -1,0 +1,83 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Ttyproc-devel] ttyproc 1.0.2
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/ttyproc-devel/2004-September/index.html" >
+   <LINK REL="made" HREF="mailto:ttyproc-devel%40lists.berlios.de?Subject=Re%3A%20%5BTtyproc-devel%5D%20ttyproc%201.0.2&In-Reply-To=%3C200409221843.i8MIh9Ou030103%40golux.thyrsus.com%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   
+   <LINK REL="Next"  HREF="000000.html">
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Ttyproc-devel] ttyproc 1.0.2</H1>
+    <B>Eric S. Raymond</B> 
+    <A HREF="mailto:ttyproc-devel%40lists.berlios.de?Subject=Re%3A%20%5BTtyproc-devel%5D%20ttyproc%201.0.2&In-Reply-To=%3C200409221843.i8MIh9Ou030103%40golux.thyrsus.com%3E"
+       TITLE="[Ttyproc-devel] ttyproc 1.0.2">esr at golux.thyrsus.com
+       </A><BR>
+    <I>Wed Sep 22 20:43:09 CEST 2004</I>
+    <P><UL>
+        
+        <LI>Next message: <A HREF="000000.html">[Ttyproc-devel] ttyproc 1.0.2
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#2">[ date ]</a>
+              <a href="thread.html#2">[ thread ]</a>
+              <a href="subject.html#2">[ subject ]</a>
+              <a href="author.html#2">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>The packaging sucks.  You're fairly new at this, I'd guess; you've made
+three classic newbie mistakes.
+
+1. Never, *ever* make a distribution tarball that unpacks into the
+current directory -- always have it unpack into a subdirectory named
+after your package.  Bad Things (like your tarball stepping all over
+the downloader's files, and the downloader screaming and cursing your name)
+happen if you break this rule.
+
+2.  Also, the instructions say you have to make test, but you actually 
+have to `make testlib'.  A phony targetname when you're producing a
+real binary is not good practice.
+
+3. I recommend against calling your test binary 'test'.  This causes
+needless confusion with test(1), especially if your user doesn't have
+his current directory on his path.  To follow standard practice, call
+it ttyproc or ttyproctest.
+
+Code looks like it works and won't be hard to integrate, though.  Nice
+job on that part.
+-- 
+		&lt;a href=&quot;<A HREF="http://www.catb.org/~esr/">http://www.catb.org/~esr/</A>&quot;&gt;Eric S. Raymond&lt;/a&gt;
+
+Our society won't be truly free until &quot;None of the Above&quot; is always an option.
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	
+	<LI>Next message: <A HREF="000000.html">[Ttyproc-devel] ttyproc 1.0.2
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#2">[ date ]</a>
+              <a href="thread.html#2">[ thread ]</a>
+              <a href="subject.html#2">[ subject ]</a>
+              <a href="author.html#2">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/ttyproc-devel">More information about the Ttyproc-devel
+mailing list</a><br>
+</body></html>

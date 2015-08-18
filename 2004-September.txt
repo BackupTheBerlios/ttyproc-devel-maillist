@@ -1,0 +1,391 @@
+From esr at snark.thyrsus.com  Wed Sep 22 22:30:15 2004
+From: esr at snark.thyrsus.com (Eric S. Raymond)
+Date: Wed, 22 Sep 2004 16:30:15 -0400
+Subject: [Ttyproc-devel] ttyproc 1.0.2
+Message-ID: <200409222030.i8MKUFqu004981@snark.thyrsus.com>
+
+The API is too complicated, and has globals (feh!).  This patch fixes it.
+
+Diffs between last version checked in and current workfile(s):
+
+--- ttyproc.c	2004/09/22 19:47:21	1.1
++++ ttyproc.c	2004/09/22 20:20:47
+@@ -35,19 +35,17 @@
+ 
+ static uid_t euid, ruid;
+ 
+-
+-int ttyproc_init()
++int ttyproc_init(void)
+ {
+ 	DIR *procdir;
+ 
+-	begin = NULL;
+-	totalents = 0;
+-	
+ 	/* check /proc is mounted */
+ 	procdir = opendir("/proc/tty");
+ 	if (!procdir) {
+-		fprintf(stderr, "ttyproc_init: /proc appears to be emtpy - %s\n", strerror(errno));
+-		return -errno;
++#ifdef TESTLIB
++	fprintf(stderr, "ttyproc_init: /proc appears to be emtpy - %s\n", strerror(errno));
++#endif /* TESTLIB */
++		return -1;
+ 	}
+ 	closedir(procdir);
+ 
+@@ -58,23 +56,16 @@
+ } /* ttyproc_init */
+ 
+ 
+-void ttyproc_close()
+-{
+-	freenodes();
+-}
+-
+-
+-/* fill up linked serial_entry list by parsing /proc/tty/driver/usbserial */
+-int ttyproc_scanlist()
++/* gather linked serial_entry list by parsing /proc/tty/driver/usbserial */
++serialent_t *ttyproc_scanlist(void)
+ {
+ 	char *linebuf;
+ 	char temp[30];
+ 	FILE *fp;
+ 	int status;
++	serialent_t *entries = NULL;
++	int totalents = 0;
+ 
+-	if (begin)
+-		freenodes();
+-	
+ 	/* change process userid for file access */
+ 	#ifdef _POSIX_SAVED_IDS
+ 		status = seteuid(euid);
+@@ -83,8 +74,10 @@
+ 	#endif
+ 	
+ 	if (status<0) {
++#ifdef TESTLIB
+ 		fprintf(stderr, "ttyproc_scanlist: setuid - %s\n", strerror(errno));
+-		return -errno;
++#endif /* TESTLIB */
++		return NULL;
+ 	}
+ 	
+ 	fp = fopen("/proc/tty/driver/usbserial", "r");
+@@ -96,28 +89,32 @@
+ 	#endif
+ 	
+ 	if (!fp) {
+-		fprintf(stderr, "fopen usbserial: %s\n", strerror(errno));
+-		return -errno;
++#ifdef TESTLIB
++		fprintf(stderr, "ttyproc_scanlist: memory allocation for linebuffer failed");
++#endif /* TESTLIB */
++		return NULL;
+ 	}
+ 
+ 	linebuf = (char *)malloc(256);
+ 	if (!linebuf) {
+-		fprintf(stderr, "ttyproc_scanlist: memory allocation for linebuffer failed");
+ 		fclose(fp);
+-		return -ENOMEM;
++		errno -ENOMEM;
++		return NULL;
+ 	}
+ 
+-	totalents = 0;
+ 	fgets(temp, 30, fp); /* skip usbserial header */
+ 
+ 	while (fgets(linebuf, 256, fp)!=NULL) {
+ 		serialent_t *node;
+ 		node = (serialent_t *)malloc(sizeof(*node));
+ 		if (!node) {
++#ifdef TESTLIB
+ 			fprintf(stderr, "ttyproc_scanlist: memory allocation for node failed");
+-			freenodes();
++#endif /* TESTLIB */
++			ttyproc_close(entries);
+ 			fclose(fp);
+-			return -ENOMEM;
++			errno = ENOMEM;
++			return NULL;
+ 		}
+ 
+ 		totalents++;
+@@ -127,12 +124,13 @@
+ 		       &node->portid, node->buspath);
+ 		node->nodeid = totalents;
+ 
+-		addnode(node);
++		node->next = entries;
++		entries = node;
+ 	}
+ 
+ 	free(linebuf);	
+ 	fclose(fp);
+-	return 0;
++	return entries;
+ } /* ttyproc_scanlist */
+ 
+ 
+@@ -169,22 +167,18 @@
+ 
+ 
+ /* if calling when parsing nodes, use ttyproc_getpath_node instead */
+-int ttyproc_getpath_vpid(char *dpath, int vid, int pid, int pnum)
++int ttyproc_getpath_vpid(char *dpath, int vid, int pid, int pnum, serialent_t *entries)
+ {
+-	serialent_t *cur;
+-
+-	cur = begin;
+-
+-	while (cur) {
+-		if ((cur->vid == vid) && (cur->pid == pid)) {
+-			if (cur->portid == pnum) {
+-				return ttyproc_getpath_node(dpath, cur);	
++	while (entries) {
++		if ((entries->vid == vid) && (entries->pid == pid)) {
++			if (entries->portid == pnum) {
++				return ttyproc_getpath_node(dpath, entries);	
+ 			}
+ 		}
+-		cur = cur->next;
++		entries = entries->next;
+ 	}
+ 
+-	if (!cur) {
++	if (!entries) {
+ 		*dpath = '\0';
+ 		return -1;
+ 	}
+@@ -198,7 +192,7 @@
+ {
+ 	char path[15];
+ 
+-	if (!begin)
++	if (!node)
+ 		return -1;
+ 
+ 	if (ttyproc_getpath_node(path, node)<0)
+@@ -208,21 +202,11 @@
+ } /* ttyproc_getfd_node */
+ 
+ 
+-/* both functions below were static */
+-/* TODO: link nodes for FIFO access */
+-static void addnode(serialent_t *topush)
+-{	
+-	topush->next = begin;
+-	begin = topush;
+-}
+-
+ 
+-static void freenodes(void)
+-{	
++void ttyproc_close(serialent_t *begin)
++{
+ 	serialent_t *nodeptr;
+ 
+-	totalents = 0;
+-
+ 	if (!begin)
+ 		return;
+ 
+@@ -231,7 +215,7 @@
+ 		free(begin);
+ 		begin = nodeptr;
+ 	}
+-} /* freenodes */
++} /* ttyproc_close */
+ 
+ 	
+ #ifdef TESTLIB
+@@ -239,10 +223,9 @@
+ /* example usage "./test 1163 0100" */
+ int main(int argc, char *argv[])
+ {
+-	serialent_t *node;
++    serialent_t *node, *entries;
+ 	char path[20] = { 0 };
+ 	unsigned vid, pid;
+-	int match = 0;
+ 
+ 	if (argc < 3) {
+ 		printf("Usage is \"test VendorID ProductID\"\n");
+@@ -258,33 +241,26 @@
+ 		return 1;
+ 	}
+ 
+-	/* perform an update of the list */
+-	ttyproc_scanlist();
+-
+-	if (totalents > 0) {
+-	
+-		node = begin;
+-	
+-		while (node) {
+-		
+-			if (node->vid == vid && node->pid == pid) {
+-				match = 1;
+-				printf("Found \"%s\" connected at %s\n", node->devname, node->buspath);
+-				if (ttyproc_getpath_node(path, node) == 0) {
++	entries = ttyproc_scanlist();
++	if (!entries)
++		printf("No entries available to parse.\n");
++	else
++	    /* perform an update of the list */
++	    for (node = entries; node; node = node->next) {
++		if (node->vid == vid && node->pid == pid) {
++			printf("Found \"%s\" connected at %s\n", 
++					node->devname, node->buspath);
++			if (ttyproc_getpath_node(path, node) == 0) {
+ 					printf("Found device node path at: %s\n", path);
+-				} else
+-					printf("Could not resolve node path.\n");
+-			}
+-
+-			node = node->next;
++			} else
++				printf("Could not resolve node path.\n");
++			ttyproc_close(entries);
++			return 0;
+ 		}
+-	} else
+-		printf("No entries available to parse.\n");
+-
+-	if (!match)
+-		printf("Could not find device.\n");
++	    }
+ 
+-	ttyproc_close();
++        printf("Could not find device.\n");
++	ttyproc_close(entries);
+ 	return 0;
+ }
+ #endif
+--- ttyproc.h	2004/09/22 19:49:40	1.1
++++ ttyproc.h	2004/09/22 20:20:14
+@@ -20,10 +20,6 @@
+ 
+ typedef struct serial_entry serialent_t; 
+ 
+-/* functions used within the library */
+-static void addnode(serialent_t *topush);   /* both were static */
+-static void freenodes(void);
+-
+ /*! \brief An entry representing one line from /proc/tty/driver/usbserial.
+     
+     This structure is used when creating a linked list from usbserial entries.
+@@ -111,9 +107,6 @@
+     This is a global variable used to keep count of current nodes comprising the linked list.
+ */
+ 
+-serialent_t *begin;  /* pointer to beginning of node list, null on empty list */
+-int totalents;       /* total entries found when parsing usbserial, updated on call to ttyproc_scanlist */
+-
+ /*! \fn int ttyproc_init()
+     \brief checks proc is mounted, and performs various startup tasks
+     
+@@ -148,12 +141,12 @@
+ */
+ 
+ /* available function prototypes */
+-int  ttyproc_init();    		/* checks proc is mounted, performs various startup tasks */
+-int  ttyproc_scanlist();		/* free's current node list and re-scans serial and usbserial data */
++int  ttyproc_init(void);    		/* checks proc is mounted, performs various startup tasks */
++serialent_t *ttyproc_scanlist(void);		/* frees current node list and re-scans serial and usbserial data */
+ 	/* if successful, found node path will be placed into dpath (NULL when both paths fail stat) */
+ int  ttyproc_getpath_node(char *, serialent_t *); /* this works best when parsing within program */
+-int  ttyproc_getpath_vpid(char *, int , int , int); /* pnum should be 1 for single port lookup */
++int  ttyproc_getpath_vpid(char *, int , int , int, serialent_t *); /* pnum should be 1 for single port lookup */
+ int  ttyproc_getfd_node(serialent_t *, u_int16_t); /* returns file descriptor for node using flags for 'open' */
+-void ttyproc_close();  			/* frees current node list, performs various cleanup tasks */
++void ttyproc_close(serialent_t *);	/* frees current node list, performs various cleanup tasks */
+ 
+ #endif /* define _TTYPROC_H */
+
+-- 
+		<a href="http://www.catb.org/~esr/">Eric S. Raymond</a>
+
+Sometimes it is said that man cannot be trusted with the government
+of himself.  Can he, then, be trusted with the government of others?
+	-- Thomas Jefferson, in his 1801 inaugural address
+
+
+From esr at snark.thyrsus.com  Wed Sep 22 22:48:39 2004
+From: esr at snark.thyrsus.com (Eric S. Raymond)
+Date: Wed, 22 Sep 2004 16:48:39 -0400
+Subject: [Ttyproc-devel] ttyproc cleanup
+Message-ID: <200409222048.i8MKmdKU005336@snark.thyrsus.com>
+
+I don't see any good reason for the devpaths array to be exposed at
+library level.
+
+--- ttyproc.c	2004/09/22 20:30:30	1.2
++++ ttyproc.c	2004/09/22 20:46:17
+@@ -31,7 +31,6 @@
+ #endif
+ 
+ #include "ttyproc.h"
+-#include "pathdefs.h"
+ 
+ static uid_t euid, ruid;
+ 
+@@ -141,6 +140,12 @@
+ 	char path[15];
+ 	int x = 0;
+ 	char minor[2];
++	static char *devpaths[] = {	
++		 "/dev/ttyUSB",
++		 "/dev/usb/tts/",
++		 "/dev/tts/USB",
++		 NULL
++	};
+ 
+ 	if (!node)
+ 		return -1;
+
+-- 
+		<a href="http://www.catb.org/~esr/">Eric S. Raymond</a>
+
+The day will come when the mystical generation of Jesus by the Supreme
+Being as his father, in the womb of a virgin, will be classed with the
+fable of the generation of Minerva in the brain of Jupiter.
+	-- Thomas Jefferson, 1823
+
+
+From esr at golux.thyrsus.com  Wed Sep 22 20:43:09 2004
+From: esr at golux.thyrsus.com (Eric S. Raymond)
+Date: Wed, 22 Sep 2004 14:43:09 -0400
+Subject: [Ttyproc-devel] ttyproc 1.0.2
+Message-ID: <200409221843.i8MIh9Ou030103@golux.thyrsus.com>
+
+The packaging sucks.  You're fairly new at this, I'd guess; you've made
+three classic newbie mistakes.
+
+1. Never, *ever* make a distribution tarball that unpacks into the
+current directory -- always have it unpack into a subdirectory named
+after your package.  Bad Things (like your tarball stepping all over
+the downloader's files, and the downloader screaming and cursing your name)
+happen if you break this rule.
+
+2.  Also, the instructions say you have to make test, but you actually 
+have to `make testlib'.  A phony targetname when you're producing a
+real binary is not good practice.
+
+3. I recommend against calling your test binary 'test'.  This causes
+needless confusion with test(1), especially if your user doesn't have
+his current directory on his path.  To follow standard practice, call
+it ttyproc or ttyproctest.
+
+Code looks like it works and won't be hard to integrate, though.  Nice
+job on that part.
+-- 
+		<a href="http://www.catb.org/~esr/">Eric S. Raymond</a>
+
+Our society won't be truly free until "None of the Above" is always an option.
+
+

@@ -1,0 +1,370 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<HTML>
+ <HEAD>
+   <TITLE> [Ttyproc-devel] ttyproc 1.0.2
+   </TITLE>
+   <LINK REL="Index" HREF="http://lists.berlios.de/pipermail/ttyproc-devel/2004-September/index.html" >
+   <LINK REL="made" HREF="mailto:ttyproc-devel%40lists.berlios.de?Subject=Re%3A%20%5BTtyproc-devel%5D%20ttyproc%201.0.2&In-Reply-To=%3C200409222030.i8MKUFqu004981%40snark.thyrsus.com%3E">
+   <META NAME="robots" CONTENT="index,nofollow">
+   <style type="text/css">
+       pre {
+           white-space: pre-wrap;       /* css-2.1, curent FF, Opera, Safari */
+           }
+   </style>
+   <META http-equiv="Content-Type" content="text/html; charset=us-ascii">
+   <LINK REL="Previous"  HREF="000002.html">
+   <LINK REL="Next"  HREF="000001.html">
+ </HEAD>
+ <BODY BGCOLOR="#ffffff">
+   <H1>[Ttyproc-devel] ttyproc 1.0.2</H1>
+    <B>Eric S. Raymond</B> 
+    <A HREF="mailto:ttyproc-devel%40lists.berlios.de?Subject=Re%3A%20%5BTtyproc-devel%5D%20ttyproc%201.0.2&In-Reply-To=%3C200409222030.i8MKUFqu004981%40snark.thyrsus.com%3E"
+       TITLE="[Ttyproc-devel] ttyproc 1.0.2">esr at snark.thyrsus.com
+       </A><BR>
+    <I>Wed Sep 22 22:30:15 CEST 2004</I>
+    <P><UL>
+        <LI>Previous message: <A HREF="000002.html">[Ttyproc-devel] ttyproc 1.0.2
+</A></li>
+        <LI>Next message: <A HREF="000001.html">[Ttyproc-devel] ttyproc cleanup
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#0">[ date ]</a>
+              <a href="thread.html#0">[ thread ]</a>
+              <a href="subject.html#0">[ subject ]</a>
+              <a href="author.html#0">[ author ]</a>
+         </LI>
+       </UL>
+    <HR>  
+<!--beginarticle-->
+<PRE>The API is too complicated, and has globals (feh!).  This patch fixes it.
+
+Diffs between last version checked in and current workfile(s):
+
+--- ttyproc.c	2004/09/22 19:47:21	1.1
++++ ttyproc.c	2004/09/22 20:20:47
+@@ -35,19 +35,17 @@
+ 
+ static uid_t euid, ruid;
+ 
+-
+-int ttyproc_init()
++int ttyproc_init(void)
+ {
+ 	DIR *procdir;
+ 
+-	begin = NULL;
+-	totalents = 0;
+-	
+ 	/* check /proc is mounted */
+ 	procdir = opendir(&quot;/proc/tty&quot;);
+ 	if (!procdir) {
+-		fprintf(stderr, &quot;ttyproc_init: /proc appears to be emtpy - %s\n&quot;, strerror(errno));
+-		return -errno;
++#ifdef TESTLIB
++	fprintf(stderr, &quot;ttyproc_init: /proc appears to be emtpy - %s\n&quot;, strerror(errno));
++#endif /* TESTLIB */
++		return -1;
+ 	}
+ 	closedir(procdir);
+ 
+@@ -58,23 +56,16 @@
+ } /* ttyproc_init */
+ 
+ 
+-void ttyproc_close()
+-{
+-	freenodes();
+-}
+-
+-
+-/* fill up linked serial_entry list by parsing /proc/tty/driver/usbserial */
+-int ttyproc_scanlist()
++/* gather linked serial_entry list by parsing /proc/tty/driver/usbserial */
++serialent_t *ttyproc_scanlist(void)
+ {
+ 	char *linebuf;
+ 	char temp[30];
+ 	FILE *fp;
+ 	int status;
++	serialent_t *entries = NULL;
++	int totalents = 0;
+ 
+-	if (begin)
+-		freenodes();
+-	
+ 	/* change process userid for file access */
+ 	#ifdef _POSIX_SAVED_IDS
+ 		status = seteuid(euid);
+@@ -83,8 +74,10 @@
+ 	#endif
+ 	
+ 	if (status&lt;0) {
++#ifdef TESTLIB
+ 		fprintf(stderr, &quot;ttyproc_scanlist: setuid - %s\n&quot;, strerror(errno));
+-		return -errno;
++#endif /* TESTLIB */
++		return NULL;
+ 	}
+ 	
+ 	fp = fopen(&quot;/proc/tty/driver/usbserial&quot;, &quot;r&quot;);
+@@ -96,28 +89,32 @@
+ 	#endif
+ 	
+ 	if (!fp) {
+-		fprintf(stderr, &quot;fopen usbserial: %s\n&quot;, strerror(errno));
+-		return -errno;
++#ifdef TESTLIB
++		fprintf(stderr, &quot;ttyproc_scanlist: memory allocation for linebuffer failed&quot;);
++#endif /* TESTLIB */
++		return NULL;
+ 	}
+ 
+ 	linebuf = (char *)malloc(256);
+ 	if (!linebuf) {
+-		fprintf(stderr, &quot;ttyproc_scanlist: memory allocation for linebuffer failed&quot;);
+ 		fclose(fp);
+-		return -ENOMEM;
++		errno -ENOMEM;
++		return NULL;
+ 	}
+ 
+-	totalents = 0;
+ 	fgets(temp, 30, fp); /* skip usbserial header */
+ 
+ 	while (fgets(linebuf, 256, fp)!=NULL) {
+ 		serialent_t *node;
+ 		node = (serialent_t *)malloc(sizeof(*node));
+ 		if (!node) {
++#ifdef TESTLIB
+ 			fprintf(stderr, &quot;ttyproc_scanlist: memory allocation for node failed&quot;);
+-			freenodes();
++#endif /* TESTLIB */
++			ttyproc_close(entries);
+ 			fclose(fp);
+-			return -ENOMEM;
++			errno = ENOMEM;
++			return NULL;
+ 		}
+ 
+ 		totalents++;
+@@ -127,12 +124,13 @@
+ 		       &amp;node-&gt;portid, node-&gt;buspath);
+ 		node-&gt;nodeid = totalents;
+ 
+-		addnode(node);
++		node-&gt;next = entries;
++		entries = node;
+ 	}
+ 
+ 	free(linebuf);	
+ 	fclose(fp);
+-	return 0;
++	return entries;
+ } /* ttyproc_scanlist */
+ 
+ 
+@@ -169,22 +167,18 @@
+ 
+ 
+ /* if calling when parsing nodes, use ttyproc_getpath_node instead */
+-int ttyproc_getpath_vpid(char *dpath, int vid, int pid, int pnum)
++int ttyproc_getpath_vpid(char *dpath, int vid, int pid, int pnum, serialent_t *entries)
+ {
+-	serialent_t *cur;
+-
+-	cur = begin;
+-
+-	while (cur) {
+-		if ((cur-&gt;vid == vid) &amp;&amp; (cur-&gt;pid == pid)) {
+-			if (cur-&gt;portid == pnum) {
+-				return ttyproc_getpath_node(dpath, cur);	
++	while (entries) {
++		if ((entries-&gt;vid == vid) &amp;&amp; (entries-&gt;pid == pid)) {
++			if (entries-&gt;portid == pnum) {
++				return ttyproc_getpath_node(dpath, entries);	
+ 			}
+ 		}
+-		cur = cur-&gt;next;
++		entries = entries-&gt;next;
+ 	}
+ 
+-	if (!cur) {
++	if (!entries) {
+ 		*dpath = '\0';
+ 		return -1;
+ 	}
+@@ -198,7 +192,7 @@
+ {
+ 	char path[15];
+ 
+-	if (!begin)
++	if (!node)
+ 		return -1;
+ 
+ 	if (ttyproc_getpath_node(path, node)&lt;0)
+@@ -208,21 +202,11 @@
+ } /* ttyproc_getfd_node */
+ 
+ 
+-/* both functions below were static */
+-/* TODO: link nodes for FIFO access */
+-static void addnode(serialent_t *topush)
+-{	
+-	topush-&gt;next = begin;
+-	begin = topush;
+-}
+-
+ 
+-static void freenodes(void)
+-{	
++void ttyproc_close(serialent_t *begin)
++{
+ 	serialent_t *nodeptr;
+ 
+-	totalents = 0;
+-
+ 	if (!begin)
+ 		return;
+ 
+@@ -231,7 +215,7 @@
+ 		free(begin);
+ 		begin = nodeptr;
+ 	}
+-} /* freenodes */
++} /* ttyproc_close */
+ 
+ 	
+ #ifdef TESTLIB
+@@ -239,10 +223,9 @@
+ /* example usage &quot;./test 1163 0100&quot; */
+ int main(int argc, char *argv[])
+ {
+-	serialent_t *node;
++    serialent_t *node, *entries;
+ 	char path[20] = { 0 };
+ 	unsigned vid, pid;
+-	int match = 0;
+ 
+ 	if (argc &lt; 3) {
+ 		printf(&quot;Usage is \&quot;test VendorID ProductID\&quot;\n&quot;);
+@@ -258,33 +241,26 @@
+ 		return 1;
+ 	}
+ 
+-	/* perform an update of the list */
+-	ttyproc_scanlist();
+-
+-	if (totalents &gt; 0) {
+-	
+-		node = begin;
+-	
+-		while (node) {
+-		
+-			if (node-&gt;vid == vid &amp;&amp; node-&gt;pid == pid) {
+-				match = 1;
+-				printf(&quot;Found \&quot;%s\&quot; connected at %s\n&quot;, node-&gt;devname, node-&gt;buspath);
+-				if (ttyproc_getpath_node(path, node) == 0) {
++	entries = ttyproc_scanlist();
++	if (!entries)
++		printf(&quot;No entries available to parse.\n&quot;);
++	else
++	    /* perform an update of the list */
++	    for (node = entries; node; node = node-&gt;next) {
++		if (node-&gt;vid == vid &amp;&amp; node-&gt;pid == pid) {
++			printf(&quot;Found \&quot;%s\&quot; connected at %s\n&quot;, 
++					node-&gt;devname, node-&gt;buspath);
++			if (ttyproc_getpath_node(path, node) == 0) {
+ 					printf(&quot;Found device node path at: %s\n&quot;, path);
+-				} else
+-					printf(&quot;Could not resolve node path.\n&quot;);
+-			}
+-
+-			node = node-&gt;next;
++			} else
++				printf(&quot;Could not resolve node path.\n&quot;);
++			ttyproc_close(entries);
++			return 0;
+ 		}
+-	} else
+-		printf(&quot;No entries available to parse.\n&quot;);
+-
+-	if (!match)
+-		printf(&quot;Could not find device.\n&quot;);
++	    }
+ 
+-	ttyproc_close();
++        printf(&quot;Could not find device.\n&quot;);
++	ttyproc_close(entries);
+ 	return 0;
+ }
+ #endif
+--- ttyproc.h	2004/09/22 19:49:40	1.1
++++ ttyproc.h	2004/09/22 20:20:14
+@@ -20,10 +20,6 @@
+ 
+ typedef struct serial_entry serialent_t; 
+ 
+-/* functions used within the library */
+-static void addnode(serialent_t *topush);   /* both were static */
+-static void freenodes(void);
+-
+ /*! \brief An entry representing one line from /proc/tty/driver/usbserial.
+     
+     This structure is used when creating a linked list from usbserial entries.
+@@ -111,9 +107,6 @@
+     This is a global variable used to keep count of current nodes comprising the linked list.
+ */
+ 
+-serialent_t *begin;  /* pointer to beginning of node list, null on empty list */
+-int totalents;       /* total entries found when parsing usbserial, updated on call to ttyproc_scanlist */
+-
+ /*! \fn int ttyproc_init()
+     \brief checks proc is mounted, and performs various startup tasks
+     
+@@ -148,12 +141,12 @@
+ */
+ 
+ /* available function prototypes */
+-int  ttyproc_init();    		/* checks proc is mounted, performs various startup tasks */
+-int  ttyproc_scanlist();		/* free's current node list and re-scans serial and usbserial data */
++int  ttyproc_init(void);    		/* checks proc is mounted, performs various startup tasks */
++serialent_t *ttyproc_scanlist(void);		/* frees current node list and re-scans serial and usbserial data */
+ 	/* if successful, found node path will be placed into dpath (NULL when both paths fail stat) */
+ int  ttyproc_getpath_node(char *, serialent_t *); /* this works best when parsing within program */
+-int  ttyproc_getpath_vpid(char *, int , int , int); /* pnum should be 1 for single port lookup */
++int  ttyproc_getpath_vpid(char *, int , int , int, serialent_t *); /* pnum should be 1 for single port lookup */
+ int  ttyproc_getfd_node(serialent_t *, u_int16_t); /* returns file descriptor for node using flags for 'open' */
+-void ttyproc_close();  			/* frees current node list, performs various cleanup tasks */
++void ttyproc_close(serialent_t *);	/* frees current node list, performs various cleanup tasks */
+ 
+ #endif /* define _TTYPROC_H */
+
+-- 
+		&lt;a href=&quot;<A HREF="http://www.catb.org/~esr/">http://www.catb.org/~esr/</A>&quot;&gt;Eric S. Raymond&lt;/a&gt;
+
+Sometimes it is said that man cannot be trusted with the government
+of himself.  Can he, then, be trusted with the government of others?
+	-- Thomas Jefferson, in his 1801 inaugural address
+
+</PRE>
+
+<!--endarticle-->
+    <HR>
+    <P><UL>
+        <!--threads-->
+	<LI>Previous message: <A HREF="000002.html">[Ttyproc-devel] ttyproc 1.0.2
+</A></li>
+	<LI>Next message: <A HREF="000001.html">[Ttyproc-devel] ttyproc cleanup
+</A></li>
+         <LI> <B>Messages sorted by:</B> 
+              <a href="date.html#0">[ date ]</a>
+              <a href="thread.html#0">[ thread ]</a>
+              <a href="subject.html#0">[ subject ]</a>
+              <a href="author.html#0">[ author ]</a>
+         </LI>
+       </UL>
+
+<hr>
+<a href="https://lists.berlios.de/mailman/listinfo/ttyproc-devel">More information about the Ttyproc-devel
+mailing list</a><br>
+</body></html>
